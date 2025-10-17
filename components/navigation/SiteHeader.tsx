@@ -14,49 +14,108 @@ import {
   DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu'
 
+type UserProfile = {
+  username: string
+  user_image: string | null
+  role: string
+}
+
 export default function SiteHeader() {
   const supabase = createClient()
   const [session, setSession] = useState<any>(null)
-  const [username, setUsername] = useState('')
-  const [userImage, setUserImage] = useState<string | null>(null)
+  const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [loading, setLoading] = useState(true)
 
+  // --- Listen for auth state changes and maintain session ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const getSession = async () => {
+      const { data, error } = await supabase.auth.getSession()
+      if (error) {
+        console.error('❌ Error getting session:', error.message)
+        setLoading(false)
+        return
+      }
+
+      if (data?.session) {
+        console.log('✅ Session found:', data.session.user.id)
+        setSession(data.session)
+      } else {
+        console.warn('⚠️ No active session found.')
+        setSession(null)
+      }
+      setLoading(false)
+    }
+
+    getSession()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log('🔁 Auth state changed:', _event, session?.user?.id)
       setSession(session)
+      setLoading(false)
     })
-    return () => listener.subscription.unsubscribe()
+
+    return () => subscription.unsubscribe()
   }, [supabase])
 
+  // --- Fetch user profile from public.users when session is ready ---
   useEffect(() => {
-    if (!session) return
-    ;(async () => {
-      const { data } = await supabase
+    const fetchUserProfile = async () => {
+      if (!session?.user?.id) {
+        console.log('⚠️ No session or user ID yet, skipping profile fetch.')
+        setLoading(false)
+        return
+      }
+
+      console.log('🔍 Fetching user profile for ID:', session.user.id)
+
+      const { data, error } = await supabase
         .from('users')
-        .select('username, user_image')
+        .select('username, user_image, role')
         .eq('id', session.user.id)
         .maybeSingle()
-      if (data) {
-        setUsername(data.username)
-        setUserImage(data.user_image)
+
+      if (error) {
+        console.error('❌ Error fetching user profile:', error)
+      } else if (!data) {
+        console.warn('⚠️ No user profile found in public.users for this ID')
+      } else {
+        console.log('✅ User profile loaded:', data)
+        setProfile(data)
       }
-    })()
+
+      setLoading(false)
+    }
+
+    // Run only when a valid session appears
+    if (session?.user?.id) {
+      fetchUserProfile()
+    }
   }, [session, supabase])
 
+  // --- Logout handler ---
   const handleLogout = async () => {
+    console.log('👋 Logging out...')
     await supabase.auth.signOut()
+    setSession(null)
+    setProfile(null)
+    setLoading(false)
     window.location.href = '/'
   }
 
   return (
-    <header className="border-b bg-white/90 backdrop-blur-sm">
-      <div className="max-w-6xl mx-auto flex items-center justify-between p-4">
+    <header className="border-b bg-background/90 backdrop-blur-sm">
+      <div className="w-full flex items-center justify-between px-3 md:px-4 py-3">
         {/* --- Left: Logo --- */}
-        <Link href="/" className="text-xl font-semibold tracking-tight">
+        <Link
+          href="/"
+          className="text-xl font-semibold tracking-tight hover:text-primary transition"
+        >
           VIP Sports
         </Link>
 
-        {/* --- Middle: Global Nav --- */}
+        {/* --- Middle: Navigation --- */}
         <nav className="hidden md:flex items-center gap-6">
           <Link
             href="/"
@@ -70,46 +129,82 @@ export default function SiteHeader() {
           >
             Lobby
           </Link>
+          {profile?.role === 'admin' && (
+            <Link
+              href="/dashboard"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground transition"
+            >
+              Admin
+            </Link>
+          )}
         </nav>
 
-        {/* --- Right: Auth Buttons or Avatar --- */}
-        {!session ? (
-          <div className="flex gap-3">
-            <Link href="/login">
-              <Button variant="outline" size="sm">
-                Login
-              </Button>
-            </Link>
-            <Link href="/signup">
-              <Button size="sm">Sign Up</Button>
-            </Link>
-          </div>
-        ) : (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="focus:outline-none">
-                <UserAvatar username={username || 'U'} imageUrl={userImage} />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel className="text-gray-700 flex items-center gap-3">
-                <UserAvatar username={username || 'U'} imageUrl={userImage} />
-                {username}
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link href="/dashboard">Dashboard</Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={handleLogout}
-                className="text-red-600 focus:text-red-600"
-              >
-                Logout
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        {/* --- Right: Auth Section --- */}
+        <div className="flex items-center">
+          {loading ? (
+            <div className="h-9 w-9 rounded-full bg-muted animate-pulse" />
+          ) : !session ? (
+            <div className="flex gap-2">
+              <Link href="/login">
+                <Button variant="outline" size="sm">
+                  Login
+                </Button>
+              </Link>
+              <Link href="/signup">
+                <Button size="sm">Sign Up</Button>
+              </Link>
+            </div>
+          ) : profile ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="focus:outline-none">
+                  <UserAvatar
+                    username={profile.username}
+                    imageUrl={profile.user_image}
+                  />
+                </button>
+              </DropdownMenuTrigger>
+
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel className="flex items-center gap-3">
+                  <UserAvatar
+                    username={profile.username}
+                    imageUrl={profile.user_image}
+                  />
+                  <div className="flex flex-col">
+                    <span className="font-medium text-sm leading-tight">
+                      {profile.username}
+                    </span>
+                    <span className="text-xs text-muted-foreground capitalize">
+                      {profile.role}
+                    </span>
+                  </div>
+                </DropdownMenuLabel>
+
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href="/dashboard">Dashboard</Link>
+                </DropdownMenuItem>
+
+                {profile.role === 'admin' && (
+                  <DropdownMenuItem asChild>
+                    <Link href="/dashboard/admin">Admin Panel</Link>
+                  </DropdownMenuItem>
+                )}
+
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  className="text-red-600 focus:text-red-600"
+                >
+                  Logout
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <div className="h-9 w-9 rounded-full bg-muted" />
+          )}
+        </div>
       </div>
     </header>
   )
